@@ -17,10 +17,10 @@ Installed files:
 ~/Applications/CatdexMenu.app
 ```
 
-If `~/.local/bin` is not on your `PATH`, add it to your shell config:
+The installer adds `~/.local/bin` to `~/.zshrc` when it is missing. For an already-open terminal, reload your zsh config once:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+source ~/.zshrc
 ```
 
 ## Start The Menu Bar App
@@ -411,10 +411,10 @@ scripts/install-local.sh
 ~/Applications/CatdexMenu.app
 ```
 
-`~/.local/bin`이 `PATH`에 없다면 셸 설정에 추가합니다.
+설치 스크립트는 `~/.local/bin`이 `PATH`에 없으면 `~/.zshrc`에 자동으로 추가합니다. 이미 열려 있는 터미널에서는 한 번만 설정을 다시 읽으면 됩니다.
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+source ~/.zshrc
 ```
 
 ## 메뉴바 앱 실행
