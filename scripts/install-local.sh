@@ -48,21 +48,10 @@ Installed:
 
 PATH configured in:
   $ZSHRC
-MSG
 
-if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-    cat <<MSG
-
-To use catdex in this already-open terminal, run:
+To use catdex in this already-open terminal after install, run:
   source "$ZSHRC"
 
 New zsh terminals can run:
   catdex
 MSG
-else
-    cat <<MSG
-
-You can run:
-  catdex
-MSG
-fi

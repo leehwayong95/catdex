@@ -160,6 +160,45 @@ final class StatusStoreTests: XCTestCase {
         XCTAssertEqual(store.loadSession(id: "editable")?.task, "Renamed")
     }
 
+    func testLoadLegacySessionWithoutBackendDefaultsToCodex() throws {
+        let root = try temporaryRoot()
+        let store = StatusStore(paths: CatdexPaths(root: root))
+        try store.prepareDirectories()
+        let legacy = """
+        {
+          "id" : "legacy",
+          "lastMessage" : "running",
+          "state" : "running",
+          "task" : "Legacy",
+          "updatedAt" : "2026-06-11T00:00:00Z",
+          "workspace" : "/tmp/project"
+        }
+        """
+        try Data(legacy.utf8).write(to: store.sessionURL(for: "legacy"))
+
+        let session = store.loadSession(id: "legacy")
+
+        XCTAssertEqual(session?.backend, .codex)
+    }
+
+    func testSaveAndLoadOpenCodeBackend() throws {
+        let root = try temporaryRoot()
+        let store = StatusStore(paths: CatdexPaths(root: root))
+        try store.save(CatdexSession(
+            id: "opencode",
+            state: .responding,
+            task: "OpenCode",
+            workspace: "/tmp/project",
+            updatedAt: Date(timeIntervalSince1970: 100),
+            lastMessage: "thinking",
+            backend: .opencode
+        ))
+
+        let session = store.loadSession(id: "opencode")
+
+        XCTAssertEqual(session?.backend, .opencode)
+    }
+
     func testSessionIDContainsReadableSlug() {
         let id = SessionFactory.makeID(
             task: "API 테스트 수정!",

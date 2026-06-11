@@ -113,13 +113,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
         let visibleSessions = sessions.filter { $0.state != .done }
-        let title = NSMenuItem(title: "🐱 Codex Cats", action: nil, keyEquivalent: "")
+        let title = NSMenuItem(title: "🐱 Catdex Sessions", action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
         menu.addItem(NSMenuItem.separator())
 
         if visibleSessions.isEmpty {
-            let sleeping = NSMenuItem(title: "💤 자는 중... 진행 중인 Codex 작업 없음", action: nil, keyEquivalent: "")
+            let sleeping = NSMenuItem(title: "💤 자는 중... 진행 중인 작업 없음", action: nil, keyEquivalent: "")
             sleeping.isEnabled = false
             menu.addItem(sleeping)
         } else {
@@ -226,6 +226,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeSessionMenu(for session: CatdexSession) -> NSMenu {
         let menu = NSMenu(title: session.task)
 
+        let backend = NSMenuItem(title: "Backend: \(session.backendDisplayName)", action: nil, keyEquivalent: "")
+        backend.isEnabled = false
+        menu.addItem(backend)
+
         let message = NSMenuItem(title: session.lastMessage, action: nil, keyEquivalent: "")
         message.isEnabled = false
         menu.addItem(message)
@@ -289,7 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func menuTitle(for session: CatdexSession) -> String {
         let state = session.state.rawValue.uppercased()
         let branch = session.branch.map { " @\($0)" } ?? ""
-        return "\(session.displayEmoji) \(state)  \(session.task)  ·  \(session.projectName)\(branch)"
+        return "\(session.displayEmoji) \(state)  \(session.backendDisplayName)  ·  \(session.task)  ·  \(session.projectName)\(branch)"
     }
 
     private func tooltip(for session: CatdexSession) -> String {
@@ -967,7 +971,7 @@ final class SessionContextViewController: NSViewController {
 
     private func makeSubtitleLabel() -> NSTextField {
         let branch = session.branch.map { " @\($0)" } ?? ""
-        let label = NSTextField(labelWithString: "\(session.state.rawValue.uppercased()) · \(session.projectName)\(branch)")
+        let label = NSTextField(labelWithString: "\(session.state.rawValue.uppercased()) · \(session.backendDisplayName) · \(session.projectName)\(branch)")
         label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
         label.textColor = .secondaryLabelColor
         label.lineBreakMode = .byTruncatingTail
@@ -1027,6 +1031,7 @@ final class SessionContextViewController: NSViewController {
         var sections: [String] = []
         sections.append(formatSection("CURRENT", [
             ("State", session.state.rawValue.uppercased()),
+            ("Backend", session.backendDisplayName),
             ("Last message", session.lastMessage),
             ("Updated", Self.eventTimeFormatter.string(from: session.updatedAt))
         ]))
@@ -1189,6 +1194,7 @@ final class SessionContextViewController: NSViewController {
 private struct IconSettings: Codable {
     var iconPaths: [String: String] = [:]
     var iconEmojis: [String: String] = [:]
+    var defaultBackend: AgentBackend?
     var floatingPanelOrigin: PanelOrigin?
     var tokenUsageRange: UsageDateRangeSetting?
     var hourlyTokenUsageRefreshEnabled: Bool?
@@ -1198,6 +1204,7 @@ private struct IconSettings: Codable {
     enum CodingKeys: String, CodingKey {
         case iconPaths
         case iconEmojis
+        case defaultBackend
         case floatingPanelOrigin
         case tokenUsageRange
         case hourlyTokenUsageRefreshEnabled
@@ -1211,6 +1218,7 @@ private struct IconSettings: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         iconPaths = try container.decodeIfPresent([String: String].self, forKey: .iconPaths) ?? [:]
         iconEmojis = try container.decodeIfPresent([String: String].self, forKey: .iconEmojis) ?? [:]
+        defaultBackend = try container.decodeIfPresent(AgentBackend.self, forKey: .defaultBackend)
         floatingPanelOrigin = try container.decodeIfPresent(PanelOrigin.self, forKey: .floatingPanelOrigin)
         tokenUsageRange = try container.decodeIfPresent(UsageDateRangeSetting.self, forKey: .tokenUsageRange)
         hourlyTokenUsageRefreshEnabled = try container.decodeIfPresent(
@@ -1228,6 +1236,7 @@ private struct IconSettings: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(iconPaths, forKey: .iconPaths)
         try container.encode(iconEmojis, forKey: .iconEmojis)
+        try container.encodeIfPresent(defaultBackend, forKey: .defaultBackend)
         try container.encodeIfPresent(floatingPanelOrigin, forKey: .floatingPanelOrigin)
         try container.encodeIfPresent(tokenUsageRange, forKey: .tokenUsageRange)
         try container.encodeIfPresent(
@@ -1291,6 +1300,15 @@ final class IconSettingsStore {
 
     func hourlyTokenUsageRefreshEnabled() -> Bool {
         settings.hourlyTokenUsageRefreshEnabled ?? true
+    }
+
+    func defaultBackend() -> AgentBackend {
+        settings.defaultBackend ?? .codex
+    }
+
+    func setDefaultBackend(_ backend: AgentBackend) throws {
+        settings.defaultBackend = backend
+        try save()
     }
 
     func setHourlyTokenUsageRefreshEnabled(_ isEnabled: Bool) throws {
@@ -1634,6 +1652,8 @@ final class IconSettingsWindowController: NSWindowController {
         title.font = NSFont.systemFont(ofSize: 17, weight: .semibold)
         stack.addArrangedSubview(title)
 
+        stack.addArrangedSubview(makeDefaultBackendRow())
+
         let detail = NSTextField(labelWithString: "Choose an image file for each state. SVG, PNG, JPG, PDF, ICNS, and other NSImage-readable files can be used.")
         detail.font = NSFont.systemFont(ofSize: 12)
         detail.textColor = .secondaryLabelColor
@@ -1656,6 +1676,39 @@ final class IconSettingsWindowController: NSWindowController {
         ])
 
         window?.contentView = root
+    }
+
+    private func makeDefaultBackendRow() -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 10
+        row.alignment = .centerY
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(labelWithString: "Default Backend")
+        label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        row.addArrangedSubview(label)
+        label.widthAnchor.constraint(equalToConstant: 126).isActive = true
+
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItem(withTitle: "Codex")
+        popup.lastItem?.representedObject = AgentBackend.codex.rawValue
+        popup.addItem(withTitle: "OpenCode")
+        popup.lastItem?.representedObject = AgentBackend.opencode.rawValue
+        popup.selectItem(withTitle: iconStore.defaultBackend().displayName)
+        popup.target = self
+        popup.action = #selector(changeDefaultBackend(_:))
+        row.addArrangedSubview(popup)
+        popup.widthAnchor.constraint(equalToConstant: 160).isActive = true
+
+        let hint = NSTextField(labelWithString: "Used when catdex runs without --backend.")
+        hint.font = NSFont.systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        row.addArrangedSubview(hint)
+        hint.widthAnchor.constraint(equalToConstant: 270).isActive = true
+
+        row.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        return row
     }
 
     private func makeRow(for state: CatdexState) -> NSView {
@@ -1725,6 +1778,16 @@ final class IconSettingsWindowController: NSWindowController {
             self.rebuildContent()
             self.onChange()
         }
+    }
+
+    @objc private func changeDefaultBackend(_ sender: NSPopUpButton) {
+        guard let raw = sender.selectedItem?.representedObject as? String,
+              let backend = AgentBackend(rawValue: raw)
+        else {
+            return
+        }
+        try? iconStore.setDefaultBackend(backend)
+        onChange()
     }
 
     @objc private func resetIcon(_ sender: NSButton) {
@@ -2155,7 +2218,7 @@ final class SessionGridView: NSVisualEffectView {
 
     private func tooltip(for session: CatdexSession) -> String {
         let branch = session.branch.map { " @\($0)" } ?? ""
-        return "\(session.state.rawValue.uppercased()) · \(session.task) · \(session.projectName)\(branch)\n\(session.lastMessage)"
+        return "\(session.state.rawValue.uppercased()) · \(session.backendDisplayName) · \(session.task) · \(session.projectName)\(branch)\n\(session.lastMessage)"
     }
 }
 

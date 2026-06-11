@@ -2,89 +2,6 @@ import CatdexCore
 import Foundation
 import Darwin
 
-enum CatdexMode {
-    case run
-    case cleanup
-    case doctor
-}
-
-struct CatdexOptions {
-    var mode: CatdexMode
-    var task: String?
-    var codexCommand: String
-    var codexArguments: [String]
-    var dryRun: Bool
-
-    static func parse(_ arguments: [String]) throws -> CatdexOptions {
-        let defaultCodexCommand = ProcessInfo.processInfo.environment["CATDEX_CODEX_BIN"] ?? "codex"
-        if let command = arguments.first {
-            switch command {
-            case "cleanup", "doctor":
-                guard arguments.count == 1 else {
-                    throw CatdexExit.message("catdex \(command) does not accept extra arguments")
-                }
-                return CatdexOptions(
-                    mode: command == "cleanup" ? .cleanup : .doctor,
-                    task: nil,
-                    codexCommand: defaultCodexCommand,
-                    codexArguments: [],
-                    dryRun: false
-                )
-            default:
-                break
-            }
-        }
-
-        var taskParts: [String] = []
-        var codexArguments: [String] = []
-        var codexCommand = defaultCodexCommand
-        var dryRun = false
-        var parsingCodexArguments = false
-        var index = 0
-
-        while index < arguments.count {
-            let argument = arguments[index]
-            if parsingCodexArguments {
-                codexArguments.append(argument)
-                index += 1
-                continue
-            }
-
-            switch argument {
-            case "--":
-                parsingCodexArguments = true
-            case "--help", "-h":
-                throw CatdexExit.help
-            case "--dry-run":
-                dryRun = true
-            case "--task":
-                index += 1
-                guard index < arguments.count else {
-                    throw CatdexExit.message("--task requires a session name")
-                }
-                taskParts = [arguments[index]]
-            case "--codex-bin":
-                index += 1
-                guard index < arguments.count else {
-                    throw CatdexExit.message("--codex-bin requires a path or command name")
-                }
-                codexCommand = arguments[index]
-            default:
-                codexArguments.append(argument)
-            }
-            index += 1
-        }
-
-        return CatdexOptions(
-            mode: .run,
-            task: taskParts.isEmpty ? nil : taskParts.joined(separator: " "),
-            codexCommand: codexCommand,
-            codexArguments: codexArguments,
-            dryRun: dryRun
-        )
-    }
-}
-
 enum CatdexMaintenance {
     static func cleanup(store: StatusStore = StatusStore()) -> Int32 {
         _ = store.loadSessions()
@@ -99,7 +16,7 @@ enum CatdexMaintenance {
         }
     }
 
-    static func doctor(codexCommand: String, store: StatusStore = StatusStore()) -> Int32 {
+    static func doctor(options: CatdexOptions, store: StatusStore = StatusStore()) -> Int32 {
         var failures = 0
         var warnings = 0
 
@@ -115,11 +32,11 @@ enum CatdexMaintenance {
             report("FAIL", "status directory is not writable: \(store.paths.root.path) (\(error))")
         }
 
-        if let codex = CommandLocator.findExecutable(codexCommand) {
-            report("OK", "codex executable found: \(codex.path)")
+        if let executable = CommandLocator.findExecutable(options.agentCommand) {
+            report("OK", "\(options.backend.displayName) executable found: \(executable.path)")
         } else {
             failures += 1
-            report("FAIL", "codex executable not found: \(codexCommand)")
+            report("FAIL", "\(options.backend.displayName) executable not found: \(options.agentCommand)")
         }
 
         if let catdex = CommandLocator.findExecutable("catdex") {
@@ -177,9 +94,9 @@ enum CatdexMaintenance {
     }
 }
 
-enum CatdexExit: Error {
-    case help
-    case message(String)
+protocol AgentEventMonitoring: AnyObject {
+    func start()
+    func stop()
 }
 
 final class SessionRunner {
@@ -192,7 +109,7 @@ final class SessionRunner {
     private let logURL: URL
     private var session: CatdexSession
     private var heartbeat: DispatchSourceTimer?
-    private var eventMonitor: CodexEventMonitor?
+    private var eventMonitor: AgentEventMonitoring?
     private var signalSources: [DispatchSourceSignal] = []
     private var childPID: pid_t?
     private let sessionLock = NSLock()
@@ -213,8 +130,9 @@ final class SessionRunner {
             branch: branch,
             updatedAt: Date(),
             pid: nil,
-            lastMessage: "🐾 Codex starting",
-            logPath: logURL.path
+            lastMessage: "🐾 \(options.backend.displayName) starting",
+            logPath: logURL.path,
+            backend: options.backend
         )
     }
 
@@ -291,21 +209,21 @@ final class SessionRunner {
                 return 0
             }
 
-            guard let executable = CommandLocator.findExecutable(options.codexCommand) else {
-                try save(state: .failed, message: "🙀 Cannot find \(options.codexCommand)", exitCode: 127)
-                try appendLog("cannot find command: \(options.codexCommand)")
-                sendNotification(title: "🙀 Codex failed", body: "Cannot find \(options.codexCommand)")
+            guard let executable = CommandLocator.findExecutable(options.agentCommand) else {
+                try save(state: .failed, message: "🙀 Cannot find \(options.agentCommand)", exitCode: 127)
+                try appendLog("cannot find command: \(options.agentCommand)")
+                sendNotification(title: "🙀 \(options.backend.displayName) failed", body: "Cannot find \(options.agentCommand)")
                 return 127
             }
 
             let process = try CodexProcess.start(
                 executable: executable,
-                arguments: options.codexArguments,
+                arguments: options.agentArguments,
                 workingDirectory: workspace
             )
             childPID = process.pid
-            try appendLog("codex pid \(process.pid) started")
-            try save(state: .starting, message: "🐾 Codex starting", pid: process.pid)
+            try appendLog("\(options.backend.displayName) pid \(process.pid) started")
+            try save(state: .starting, message: "🐾 \(options.backend.displayName) starting", pid: process.pid)
             startHeartbeat(pid: process.pid)
             startEventMonitor(pid: process.pid)
             installSignalHandlers(for: process)
@@ -315,12 +233,12 @@ final class SessionRunner {
             eventMonitor?.stop()
             cancelSignalHandlers()
             if code == 0 {
-                try save(state: .done, message: "😺 Codex complete", pid: process.pid, exitCode: code)
-                try appendLog("codex completed with exit 0")
+                try save(state: .done, message: "😺 \(options.backend.displayName) complete", pid: process.pid, exitCode: code)
+                try appendLog("\(options.backend.displayName) completed with exit 0")
             } else {
-                try save(state: .failed, message: "🙀 Codex failed: exit \(code)", pid: process.pid, exitCode: code)
-                try appendLog("codex failed with exit \(code)")
-                sendNotification(title: "🙀 Codex failed", body: "\(task) exited with \(code)")
+                try save(state: .failed, message: "🙀 \(options.backend.displayName) failed: exit \(code)", pid: process.pid, exitCode: code)
+                try appendLog("\(options.backend.displayName) failed with exit \(code)")
+                sendNotification(title: "🙀 \(options.backend.displayName) failed", body: "\(task) exited with \(code)")
             }
             return code
         } catch {
@@ -341,21 +259,24 @@ final class SessionRunner {
     }
 
     private func startEventMonitor(pid: Int32) {
-        let monitor = CodexEventMonitor(
-            workspace: workspace,
-            startedAt: Date(),
-            onUpdate: { [weak self] snapshot in
-                guard let self else { return }
-                if let previousState = try? self.save(
-                    state: snapshot.state,
-                    message: snapshot.message,
-                    pid: pid,
-                    codexSessionPath: snapshot.sessionPath
-                ), snapshot.state == .review, previousState != .review {
-                    self.sendNotification(title: "🐱❓ Codex needs review", body: task)
-                }
+        let update: (AgentActivitySnapshot) -> Void = { [weak self] snapshot in
+            guard let self else { return }
+            if let previousState = try? self.save(
+                state: snapshot.state,
+                message: snapshot.message,
+                pid: pid,
+                codexSessionPath: snapshot.sessionPath
+            ), snapshot.state == .review, previousState != .review {
+                self.sendNotification(title: "🐱❓ \(self.options.backend.displayName) needs review", body: self.task)
             }
-        )
+        }
+
+        let monitor: AgentEventMonitoring = switch options.backend {
+        case .codex:
+            CodexEventMonitor(workspace: workspace, startedAt: Date(), onUpdate: update)
+        case .opencode:
+            OpenCodeEventMonitor(workspace: workspace, startedAt: Date(), onUpdate: update)
+        }
         monitor.start()
         eventMonitor = monitor
     }
@@ -472,21 +393,15 @@ final class SessionRunner {
     }
 }
 
-struct CodexActivitySnapshot {
-    var state: CatdexState
-    var message: String
-    var sessionPath: String?
-}
-
-final class CodexEventMonitor {
+final class CodexEventMonitor: AgentEventMonitoring {
     private let workspace: String
     private let startedAt: Date
-    private let onUpdate: (CodexActivitySnapshot) -> Void
+    private let onUpdate: (AgentActivitySnapshot) -> Void
     private let queue = DispatchQueue(label: "catdex.codex-event-monitor", qos: .utility)
     private var timer: DispatchSourceTimer?
     private var sessionURL: URL?
 
-    init(workspace: String, startedAt: Date, onUpdate: @escaping (CodexActivitySnapshot) -> Void) {
+    init(workspace: String, startedAt: Date, onUpdate: @escaping (AgentActivitySnapshot) -> Void) {
         self.workspace = workspace
         self.startedAt = startedAt
         self.onUpdate = onUpdate
@@ -515,7 +430,7 @@ final class CodexEventMonitor {
         guard let sessionURL,
               let snapshot = inferActivity(from: sessionURL)
         else {
-            onUpdate(CodexActivitySnapshot(
+            onUpdate(AgentActivitySnapshot(
                 state: .starting,
                 message: "🐾 Waiting for Codex session",
                 sessionPath: nil
@@ -571,7 +486,7 @@ final class CodexEventMonitor {
         return true
     }
 
-    private func inferActivity(from url: URL) -> CodexActivitySnapshot? {
+    private func inferActivity(from url: URL) -> AgentActivitySnapshot? {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else {
             return nil
         }
@@ -666,7 +581,7 @@ final class CodexEventMonitor {
             message = "🐱❓ Confirmation required"
         }
 
-        return CodexActivitySnapshot(state: state, message: message, sessionPath: url.path)
+        return AgentActivitySnapshot(state: state, message: message, sessionPath: url.path)
     }
 
     private func parseJSONObject(_ string: String) -> [String: Any]? {
@@ -676,6 +591,54 @@ final class CodexEventMonitor {
             return nil
         }
         return object
+    }
+}
+
+final class OpenCodeEventMonitor: AgentEventMonitoring {
+    private let workspace: String
+    private let startedAt: Date
+    private let onUpdate: (AgentActivitySnapshot) -> Void
+    private let reader: OpenCodeActivityReader
+    private let queue = DispatchQueue(label: "catdex.opencode-event-monitor", qos: .utility)
+    private var timer: DispatchSourceTimer?
+
+    init(
+        workspace: String,
+        startedAt: Date,
+        reader: OpenCodeActivityReader = OpenCodeActivityReader(),
+        onUpdate: @escaping (AgentActivitySnapshot) -> Void
+    ) {
+        self.workspace = workspace
+        self.startedAt = startedAt
+        self.reader = reader
+        self.onUpdate = onUpdate
+    }
+
+    func start() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 1, repeating: 2)
+        timer.setEventHandler { [weak self] in
+            self?.refresh()
+        }
+        timer.resume()
+        self.timer = timer
+    }
+
+    func stop() {
+        timer?.cancel()
+        timer = nil
+    }
+
+    private func refresh() {
+        if let snapshot = reader.snapshot(workspace: workspace, startedAt: startedAt) {
+            onUpdate(snapshot)
+        } else {
+            onUpdate(AgentActivitySnapshot(
+                state: .running,
+                message: "😼 Waiting for OpenCode session",
+                sessionPath: nil
+            ))
+        }
     }
 }
 
@@ -836,18 +799,25 @@ final class CodexProcess {
 
 func printUsage() {
     print("""
-    Usage: catdex [catdex options] [codex options] [prompt]
+    Usage: catdex [catdex options] [agent options] [prompt]
            catdex cleanup
            catdex doctor
 
     Catdex options:
-      --codex-bin <command>  Codex executable to run. Defaults to CATDEX_CODEX_BIN or codex.
-      --dry-run             Create and finish a session without launching Codex.
+      --backend <codex|opencode>
+                             Agent backend. Use opencode for oh-my-openagent. Defaults to CATDEX_BACKEND, Settings, or codex.
+      --agent-bin <command>  Agent executable to run.
+      --codex-bin <command>  Codex executable to run. Selects the codex backend.
+      --opencode-bin <command>
+                             OpenCode executable to run. Selects the opencode backend.
+      --dry-run              Create and finish a session without launching the agent.
       --task <name>          Accepted for compatibility. Rename the display title from CatdexMenu.
-      -h, --help            Show catdex help. Use `catdex -- --help` for Codex help.
+      -h, --help             Show catdex help. Use `catdex -- --help` for agent help.
 
     Examples:
       catdex
+      catdex --backend opencode -- run "use oh-my-openagent"
+      catdex --opencode-bin /path/to/opencode -- run --agent sisyphus "use oh-my-openagent"
       catdex "batch reminder debug"
       catdex --model gpt-5.4 "review API"
       catdex cleanup
@@ -864,13 +834,17 @@ do {
     case .cleanup:
         exit(CatdexMaintenance.cleanup())
     case .doctor:
-        exit(CatdexMaintenance.doctor(codexCommand: options.codexCommand))
+        exit(CatdexMaintenance.doctor(options: options))
     }
-} catch CatdexExit.help {
+} catch CatdexOptionError.help {
     printUsage()
     exit(0)
-} catch CatdexExit.message(let message) {
+} catch CatdexOptionError.message(let message) {
     fputs("catdex: \(message)\n", stderr)
+    printUsage()
+    exit(2)
+} catch CatdexOptionError.invalidBackend(let backend) {
+    fputs("catdex: unknown backend: \(backend) (expected codex or opencode)\n", stderr)
     printUsage()
     exit(2)
 } catch {

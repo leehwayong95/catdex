@@ -100,6 +100,15 @@ Use a custom Codex executable:
 catdex --codex-bin /path/to/codex "check this branch"
 ```
 
+Use OpenCode / oh-my-openagent instead of Codex:
+
+```bash
+catdex --backend opencode -- run "check this branch"
+catdex --opencode-bin /path/to/opencode -- run --agent sisyphus "review this"
+```
+
+You can also choose the default backend in `CatdexMenu.app` Settings. `CATDEX_BACKEND` still wins for one shell or script run. The OpenCode backend defaults to `opencode`, or `CATDEX_OPENCODE_BIN` when set. Catdex reads OpenCode activity from `CATDEX_OPENCODE_DB`, `OPENCODE_DATA_DIR/opencode.db`, or `~/.local/share/opencode/opencode.db` when available. This is status tracking only; token usage totals still come from Codex JSONL session files.
+
 ## Statuses
 
 | State | Meaning |

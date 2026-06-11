@@ -218,6 +218,15 @@ Use a custom Codex executable:
 catdex --codex-bin /path/to/codex "review the API"
 ```
 
+Use OpenCode / oh-my-openagent instead of Codex:
+
+```bash
+catdex --backend opencode -- run "review the API"
+catdex --opencode-bin /path/to/opencode -- run --agent sisyphus "review the API"
+```
+
+You can also choose the default backend in `CatdexMenu.app` Settings. `CATDEX_BACKEND` still wins for one shell or script run. The OpenCode backend defaults to `opencode`, or `CATDEX_OPENCODE_BIN` when set. Catdex reads OpenCode activity from `CATDEX_OPENCODE_DB`, `OPENCODE_DATA_DIR/opencode.db`, or `~/.local/share/opencode/opencode.db` when available. This does not change token usage aggregation, which remains Codex JSONL-based.
+
 `--task` is accepted for compatibility, but display names are edited from CatdexMenu.
 
 ## States
@@ -589,6 +598,15 @@ Codex 실행 파일 경로를 직접 지정:
 ```bash
 catdex --codex-bin /path/to/codex "API 리뷰"
 ```
+
+Codex 대신 OpenCode / oh-my-openagent를 사용할 수 있습니다.
+
+```bash
+catdex --backend opencode -- run "API 리뷰"
+catdex --opencode-bin /path/to/opencode -- run --agent sisyphus "API 리뷰"
+```
+
+기본 backend는 `CatdexMenu.app` Settings에서도 선택할 수 있습니다. 단일 shell/script 실행에서는 `CATDEX_BACKEND` 환경변수가 설정값보다 우선합니다. OpenCode 백엔드는 기본으로 `opencode`를 실행하고, `CATDEX_OPENCODE_BIN`이 있으면 그 값을 사용합니다. 상태 추적은 `CATDEX_OPENCODE_DB`, `OPENCODE_DATA_DIR/opencode.db`, 또는 `~/.local/share/opencode/opencode.db`를 읽을 수 있을 때 동작합니다. 토큰 사용량 합산은 계속 Codex JSONL 세션 파일 기준입니다.
 
 `--task`는 호환성을 위해 허용하지만 표시명은 CatdexMenu에서 수정합니다.
 
